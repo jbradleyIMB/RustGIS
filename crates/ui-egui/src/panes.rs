@@ -997,6 +997,8 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .collect();
     entries.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.to_lowercase().cmp(&b.1.to_lowercase())));
     for (is_dir, name, path) in entries.into_iter().take(300) {
+        // A File Geodatabase is a folder, added like a file rather than opened.
+        let is_dir = is_dir && !rustgis_engine::data::source::filegdb::is_gdb_name(&name);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
             let icon = if is_dir {
