@@ -368,6 +368,7 @@ fn save_project(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 pub const EXPORT_FORMATS: &[(&str, &str)] = &[
     ("GeoJSON", "geojson"),
     ("GeoPackage", "gpkg"),
+    ("File Geodatabase", "gdb"),
     ("GeoParquet", "parquet"),
     ("Shapefile", "shp"),
     ("FlatGeobuf", "fgb"),
@@ -397,6 +398,14 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     });
     if app.dialogs.mode == "shp" && web {
         ui.label(egui::RichText::new(tl!("The Shapefile's files download as one zip.")).small().weak());
+    }
+    if app.dialogs.mode == "gdb" {
+        let note = if web {
+            tl!("The geodatabase folder downloads as one zip.")
+        } else {
+            tl!("Writes a new .gdb folder; an existing one isn't changed.")
+        };
+        ui.label(egui::RichText::new(note).small().weak());
     }
     buttons(app, ui, if web { "Download" } else { "Export…" }, |app| {
         app.run("ui.exportLayer", json!({"format": app.dialogs.mode})).map(|_| ())

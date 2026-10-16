@@ -1852,7 +1852,12 @@ impl RustGisApp {
                         return Err(e);
                     }
                 };
-                let ext = if ext == "shp" { "zip".to_string() } else { ext };
+                let ext = match ext.as_str() {
+                    "shp" => "zip".to_string(),
+                    // A geodatabase is a folder: it downloads zipped.
+                    "gdb" => "gdb.zip".to_string(),
+                    _ => ext,
+                };
                 let name = format!("{}.{ext}", l.name);
                 if left_out > 0 {
                     self.session.notify(format!("{name}: {left_out} features without drawable geometry were left out"), false);

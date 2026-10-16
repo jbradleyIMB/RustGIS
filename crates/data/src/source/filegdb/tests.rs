@@ -1,5 +1,5 @@
 use super::*;
-use crate::{FieldType, Geometry};
+use crate::{Dataset, FieldType, Geometry};
 use rustgis_geom::Coord;
 use std::collections::HashMap;
 
@@ -537,4 +537,206 @@ fn dump_fixtures() {
             }
         }
     }
+}
+
+/// Datasets covering what the writer does: every field type, every kind of geometry (and both
+/// windings of polygon rings), mixed geometry, a table, awkward names and nulls.
+fn writer_sample() -> Vec<Dataset> {
+    use crate::GeometryType as G;
+    let mut pts = Dataset::new(
+        "Cities & Towns",
+        G::Point,
+        vec![
+            crate::Field::new("name", FieldType::Text),
+            crate::Field::new("pop", FieldType::Integer),
+            crate::Field::new("big", FieldType::Integer),
+            crate::Field::new("ratio", FieldType::Double),
+            crate::Field::new("capital", FieldType::Boolean),
+            crate::Field::new("1st choice", FieldType::Text),
+            crate::Field::new("select", FieldType::Text),
+            crate::Field::new("OBJECTID", FieldType::Integer),
+            crate::Field::new("Name", FieldType::Text),
+        ],
+    );
+    pts.push(
+        Some(Geometry::Point(Coord::new(-77.0365, 38.8977))),
+        vec![
+            Value::Text("Washington ✓".into()),
+            Value::Int(689_545),
+            Value::Int(4_503_599_627_370_497),
+            Value::Float(0.25),
+            Value::Bool(true),
+            Value::Text("yes".into()),
+            Value::Text("a".into()),
+            Value::Int(7),
+            Value::Text("dup".into()),
+        ],
+    );
+    pts.push(None, vec![Value::Text("Nowhere".into())]);
+    pts.push(
+        Some(Geometry::Point(Coord::new(2.3522, 48.8566))),
+        vec![Value::Null, Value::Int(-5), Value::Null, Value::Float(f64::NAN), Value::Bool(false)],
+    );
+    let mut lines = Dataset::new("roads", G::Polyline, vec![crate::Field::new("k", FieldType::Integer)]);
+    lines.push(
+        Some(Geometry::Line(vec![
+            vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)],
+            vec![Coord::new(5.0, 5.0), Coord::new(6.0, 7.0), Coord::new(8.0, 7.5)],
+        ])),
+        vec![Value::Int(1)],
+    );
+    let mut polys = Dataset::new("parcels", G::Polygon, vec![crate::Field::new("k", FieldType::Integer)]);
+    // Outer counter-clockwise and its hole clockwise (GeoJSON's winding), then an island
+    // already in Esri's winding, not closed.
+    let outer = vec![Coord::new(0.0, 0.0), Coord::new(10.0, 0.0), Coord::new(10.0, 10.0), Coord::new(0.0, 10.0), Coord::new(0.0, 0.0)];
+    let hole = vec![Coord::new(2.0, 2.0), Coord::new(2.0, 4.0), Coord::new(4.0, 4.0), Coord::new(4.0, 2.0), Coord::new(2.0, 2.0)];
+    let island = vec![Coord::new(20.0, 20.0), Coord::new(20.0, 25.0), Coord::new(25.0, 25.0)];
+    polys.push(Some(Geometry::Polygon(vec![vec![outer, hole], vec![island]])), vec![Value::Int(1)]);
+    let mut mixed = Dataset::new("mixed", G::None, vec![crate::Field::new("k", FieldType::Integer)]);
+    mixed.push(Some(Geometry::MultiPoint(vec![Coord::new(1.0, 1.0), Coord::new(2.0, 2.0)])), vec![Value::Int(1)]);
+    mixed.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(3.0, 3.0)]])), vec![Value::Int(2)]);
+    mixed.push(None, vec![Value::Int(3)]);
+    let mut table =
+        Dataset::new("lookup", G::None, vec![crate::Field::new("code", FieldType::Integer), crate::Field::new("label", FieldType::Text)]);
+    table.push(None, vec![Value::Int(1), Value::Text("one".into())]);
+    table.push(None, vec![Value::Int(2), Value::Null]);
+    vec![pts, lines, polys, mixed, table]
+}
+
+#[test]
+fn written_geodatabases_read_back() {
+    let sample = writer_sample();
+    let refs: Vec<&Dataset> = sample.iter().collect();
+    let (files, report) = write::encode(&refs).unwrap();
+    let names: Vec<&str> = report.classes.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Cities___Towns", "roads", "parcels", "mixed_points", "mixed_lines", "lookup"]);
+    assert_eq!(report.classes.iter().map(|c| c.1).collect::<Vec<_>>(), [3, 1, 1, 2, 1, 2]);
+    assert!(report.notes.iter().any(|n| n.contains("1st choice written as F_1st_choice")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.contains("select written as select_")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.contains("OBJECTID written as OBJECTID_1")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.contains("Name written as Name_1")), "{:?}", report.notes);
+    let files: HashMap<String, Vec<u8>> = files.into_iter().collect();
+    assert_eq!(files["gdb"], [5, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(catalog(&Mem(files.clone())).unwrap().into_iter().map(|e| e.name).collect::<Vec<_>>(), names);
+
+    let pts = open(&files, Some("Cities___Towns")).unwrap();
+    let info = pts.info().clone();
+    assert_eq!(info.geometry_type, GeometryType::Point);
+    let fields: Vec<(&str, FieldType)> = info.fields.iter().map(|f| (f.name.as_str(), f.ty)).collect();
+    assert_eq!(
+        fields,
+        [
+            ("name", FieldType::Text),
+            ("pop", FieldType::Integer),
+            ("big", FieldType::Integer),
+            ("ratio", FieldType::Double),
+            ("capital", FieldType::Integer),
+            ("F_1st_choice", FieldType::Text),
+            ("select_", FieldType::Text),
+            ("OBJECTID_1", FieldType::Integer),
+            ("Name_1", FieldType::Text),
+        ]
+    );
+    let b = pts.read(&Request::all()).unwrap();
+    assert_eq!(b.features.len(), 3);
+    let Some(Geometry::Point(c)) = b.features[0].geometry else { panic!() };
+    assert!((c.x + 77.0365).abs() < 1e-9 && (c.y - 38.8977).abs() < 1e-9, "{c:?}");
+    assert_eq!(
+        b.features[0].attrs,
+        [
+            Value::Text("Washington ✓".into()),
+            Value::Int(689_545),
+            Value::Int(4_503_599_627_370_497),
+            Value::Float(0.25),
+            Value::Int(1),
+            Value::Text("yes".into()),
+            Value::Text("a".into()),
+            Value::Int(7),
+            Value::Text("dup".into()),
+        ]
+    );
+    assert!(b.features[1].geometry.is_none());
+    assert_eq!(b.features[2].attrs[3], Value::Null, "NaN is written as null");
+    assert_eq!(b.features[2].attrs[4], Value::Int(0));
+
+    let polys = open(&files, Some("parcels")).unwrap().read(&Request::all()).unwrap();
+    let Some(Geometry::Polygon(p)) = &polys.features[0].geometry else { panic!() };
+    // The hole stays in its polygon and the island is closed: the reader groups rings by winding,
+    // so this holds only if the writer wound them as Esri does.
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[0].len(), 2);
+    assert_eq!(p[1][0].len(), 4);
+    assert!(signed_area_of(&p[0][0]) < 0.0 && signed_area_of(&p[0][1]) > 0.0);
+
+    let lines = open(&files, Some("roads")).unwrap().read(&Request::all()).unwrap();
+    let Some(Geometry::Line(l)) = &lines.features[0].geometry else { panic!() };
+    assert_eq!(l[1], [Coord::new(5.0, 5.0), Coord::new(6.0, 7.0), Coord::new(8.0, 7.5)]);
+
+    let mixed_points = open(&files, Some("mixed_points")).unwrap();
+    let b = mixed_points.read(&Request::all()).unwrap();
+    assert!(matches!(&b.features[0].geometry, Some(Geometry::MultiPoint(p)) if p.len() == 2));
+    assert!(b.features[1].geometry.is_none(), "features without geometry go with the first kind");
+
+    let lookup = open(&files, Some("lookup")).unwrap();
+    assert_eq!(lookup.info().geometry_type, GeometryType::None);
+    assert_eq!(lookup.read(&Request::all()).unwrap().features[1].attrs, [Value::Int(2), Value::Null]);
+}
+
+fn signed_area_of(r: &[Coord]) -> f64 {
+    r.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum()
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn writing_folders_and_zips() {
+    let sample = writer_sample();
+    let refs: Vec<&Dataset> = sample.iter().collect();
+    let dir = std::env::temp_dir().join(format!("rustgis-filegdb-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("out.gdb");
+    write::write(&refs, &path).unwrap();
+    assert_eq!(layers(&path).unwrap().len(), 6);
+    // An existing geodatabase (or anything else) is never replaced.
+    let again = write::write(&refs, &path).unwrap_err().to_string();
+    assert!(again.contains("already exists"), "{again}");
+    // Through `io::write_path`, by extension.
+    let one = dir.join("roads.gdb");
+    assert_eq!(crate::io::write_path(&sample[1], &one).unwrap(), 0);
+    assert_eq!(layers(&one).unwrap(), ["roads"]);
+    // Nothing left behind beside them.
+    let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["out.gdb", "roads.gdb"]);
+    // Zipped for downloading, and read back from the zip.
+    let (zip, _) = write::zip(&refs, "sample").unwrap();
+    assert_eq!(zip_layers(&zip).unwrap().len(), 6);
+    let (bytes, _) = crate::io::write_bytes(&sample[2], "gdb").unwrap();
+    assert_eq!(zip_layers(&bytes).unwrap(), ["parcels"]);
+    assert!(write::encode(&[]).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn coordinates_outside_lonlat_are_null_shapes() {
+    let mut ds = Dataset::new("far", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(-500.0, 0.0))), vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(f64::NAN, 0.0))), vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![]);
+    let (files, report) = write::encode(&[&ds]).unwrap();
+    assert_eq!(report.null_shapes, 2);
+    let b = open(&files.into_iter().collect(), None).unwrap().read(&Request::all()).unwrap();
+    assert_eq!(b.features.iter().filter(|f| f.geometry.is_some()).count(), 1);
+}
+
+/// Writes the writer's sample to `RUSTGIS_FILEGDB_WRITE` (a new `.gdb` path), for opening in
+/// GDAL and ArcGIS by hand.
+#[test]
+#[ignore = "writes to a path given by hand"]
+#[cfg(not(target_arch = "wasm32"))]
+fn write_sample() {
+    let sample = writer_sample();
+    let refs: Vec<&Dataset> = sample.iter().collect();
+    let report = write::write(&refs, Path::new(&std::env::var("RUSTGIS_FILEGDB_WRITE").unwrap())).unwrap();
+    println!("{report:?}");
 }

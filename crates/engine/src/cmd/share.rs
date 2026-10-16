@@ -1,5 +1,5 @@
 //! Publish tab: export the map as PNG and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
-//! GeoParquet, Shapefile, KML/KMZ or GPX.
+//! GeoParquet, Shapefile, KML/KMZ, GPX or an Esri File Geodatabase.
 
 use std::path::Path;
 
@@ -17,7 +17,10 @@ pub fn commands() -> Vec<C> {
         C::new("share.exportLayer", "Export Features", "Publish › Output", export_layer)
             .view()
             .when(need_layer)
-            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx"}"#),
+            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.gdb|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx"}"#),
+        C::new("share.exportLayers", "Export Layers to Geodatabase", "Publish › Output", export_layers)
+            .view()
+            .params(r#"{"layers"?: [name|id] (default: every vector layer), "path": "*.gdb" (a new folder)}"#),
         C::new("share.exportTable", "Export Table", "Publish › Output", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let t = s.project.tables.get(s.table_index(p)?).ok_or("no such table")?;
@@ -73,6 +76,10 @@ fn export_map(s: &mut Session, p: &Value) -> CmdResult {
 fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let path = ps(p, "path").ok_or("path is required")?.to_string();
+    // A geodatabase says what it renamed and split.
+    if rustgis_data::source::filegdb::is_gdb_name(&path) {
+        return export_gdb(s, &[id], &path);
+    }
     let l = s.map().layer(id).ok_or("no layer")?;
     // A streamed layer exports its whole source, not the features read for the view.
     let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
@@ -86,4 +93,50 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "features": written, "leftOut": left_out}))
+}
+
+/// Writes vector layers into a new File Geodatabase: the ones `"layers"` names, else every one.
+fn export_layers(s: &mut Session, p: &Value) -> CmdResult {
+    let path = ps(p, "path").ok_or("path is required")?.to_string();
+    if !rustgis_data::source::filegdb::is_gdb_name(&path) {
+        return Err(format!("{path}: give a path ending in .gdb"));
+    }
+    let ids: Vec<u32> = match p.get("layers") {
+        Some(Value::Array(names)) => names.iter().map(|n| s.layer_id(&json!({"layer": n}))).collect::<Result<_, _>>()?,
+        Some(_) => return Err("layers is a list of layer names or ids".into()),
+        None => s.map().layers.iter().filter(|l| !l.is_raster()).map(|l| l.id).collect(),
+    };
+    export_gdb(s, &ids, &path)
+}
+
+fn export_gdb(s: &mut Session, ids: &[u32], path: &str) -> CmdResult {
+    if ids.is_empty() {
+        return Err("no vector layers to export".into());
+    }
+    let mut owned = Vec::with_capacity(ids.len());
+    for id in ids {
+        let l = s.map().layer(*id).ok_or("no layer")?;
+        if l.is_raster() {
+            return Err(format!("{} is a raster; a geodatabase holds vector layers here", l.name));
+        }
+        // A streamed layer exports its whole source, not the features read for the view.
+        let mut ds = if l.is_streamed() { l.load_all()? } else { l.dataset.clone() };
+        // Classes are named after the layers as the Layers pane shows them.
+        ds.name = l.name.clone();
+        owned.push(ds);
+    }
+    let refs: Vec<&rustgis_data::Dataset> = owned.iter().collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let report = rustgis_data::source::filegdb::write::write(&refs, Path::new(path)).map_err(|e| e.to_string())?;
+    #[cfg(target_arch = "wasm32")]
+    let report: rustgis_data::source::filegdb::write::Report = {
+        let _ = refs;
+        return Err("in the web app, Export Features downloads a geodatabase as a zip".into());
+    };
+    for n in &report.notes {
+        s.notify(format!("{path}: {n}"), false);
+    }
+    s.notify(format!("Exported {path}"), false);
+    let classes: Vec<Value> = report.classes.iter().map(|(name, rows)| json!({"name": name, "features": rows})).collect();
+    Ok(json!({"path": path, "classes": classes, "nullShapes": report.null_shapes, "notes": report.notes}))
 }
