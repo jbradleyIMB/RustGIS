@@ -1392,6 +1392,8 @@ impl RustGisApp {
                             "tif",
                             "tiff",
                             "asc",
+                            // A File Geodatabase is a folder: any of its tables picks it.
+                            "gdbtable",
                         ][..],
                         // Rasters GDAL reads (every one it is asked to read).
                         #[cfg(not(target_arch = "wasm32"))]

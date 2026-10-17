@@ -392,6 +392,14 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
 
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // A file inside a File Geodatabase (a file dialog picks files, not folders): the geodatabase.
+    #[cfg(not(target_arch = "wasm32"))]
+    let gdb = Path::new(path)
+        .parent()
+        .filter(|d| rustgis_data::source::filegdb::is_gdb_name(&d.to_string_lossy()) && Path::new(path).is_file())
+        .map(|d| d.display().to_string());
+    #[cfg(not(target_arch = "wasm32"))]
+    let path = gdb.as_deref().unwrap_or(path);
     // A geotagged photo: a point in the photo layer.
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::photo::is_photo_name(path) {
@@ -418,6 +426,15 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     if path.to_ascii_lowercase().ends_with(".rgislyr") {
         return add_layer_file(s, path);
+    }
+    // A File Geodatabase is read natively; GDAL, when installed, takes one the native reader
+    // refuses (a raster field, a newer version).
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::filegdb::is_gdb_name(path) {
+        return match add_source(s, p, Origin::Path(path)) {
+            Err(e) if rustgis_data::source::gdal::available() => add_gdal(s, p, path).map_err(|g| format!("{e}; through GDAL: {g}")),
+            r => r,
+        };
     }
     if rustgis_data::source::is_source_name(path) {
         return add_source(s, p, Origin::Path(path));
@@ -727,6 +744,17 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
 fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
     let err = |e: rustgis_data::DataError| format!("{path}: {e}");
+    // A File Geodatabase natively, else through GDAL when installed (as `layer.addData` does).
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::filegdb::is_gdb_name(path) {
+        let layers = match rustgis_data::source::layers(Path::new(path)) {
+            Err(e) if rustgis_data::source::gdal::available() => {
+                rustgis_data::source::gdal::layers(Path::new(path)).map_err(|g| format!("{path}: {e}; through GDAL: {g}"))?
+            }
+            r => r.map_err(err)?,
+        };
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::source::gdal::is_gdal_name(path) {
         let layers = rustgis_data::source::gdal::layers(Path::new(path)).map_err(err)?;
@@ -835,7 +863,7 @@ fn add_source_with(
     let mut total = None;
     let tables: Vec<Option<String>> = match (ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()), &origin) {
         (Some(t), _) => vec![Some(t.to_string())],
-        (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
+        (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") || source::filegdb::is_gdb_name(path) => {
             let mut all = source::layers(Path::new(path)).map_err(err)?;
             if all.len() > MAX_TABLES {
                 total = Some(all.len());

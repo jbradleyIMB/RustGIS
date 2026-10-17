@@ -12,6 +12,7 @@ pub mod duckdb;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod external;
 pub mod fgb;
+pub mod filegdb;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;
 #[cfg(not(target_arch = "wasm32"))]
@@ -64,14 +65,15 @@ impl Family {
 }
 
 /// File types read through a provider.
-pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb", "las", "laz"];
+pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb", "las", "laz", "gdb"];
 
 /// The most features one read returns, whatever the request asks for.
 pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 2_000_000 };
 
 /// Whether a file name is read through a provider.
 pub fn is_source_name(name: &str) -> bool {
-    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // A File Geodatabase is a folder, perhaps named with a trailing separator.
+    let ext = Path::new(name.trim_end_matches(['/', '\\'])).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     EXTENSIONS.contains(&ext.as_str())
 }
 
@@ -154,6 +156,8 @@ pub fn open_path(path: &Path, layer: Option<&str>) -> Result<Box<dyn FeatureSour
         // Only large Shapefiles are read in place (see `shp`); `is_source_name` leaves them out.
         #[cfg(not(target_arch = "wasm32"))]
         "shp" => Ok(Box::new(shp::ShpSource::open_path(path, &name)?)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "gdb" => Ok(Box::new(filegdb::FileGdbSource::open_path(path, layer)?)),
         other => {
             let _ = layer;
             Err(DataError::Unsupported(other.to_string()))
@@ -273,11 +277,14 @@ impl FeatureSource for Fetching {
     }
 }
 
-/// The vector layers in a file: the feature tables of a GeoPackage, or the one layer of others.
+/// The vector layers in a file: the feature tables of a GeoPackage, the feature classes and
+/// tables of a File Geodatabase, or the one layer of others.
 pub fn layers(path: &Path) -> Result<Vec<String>> {
     match ext(path).as_str() {
         #[cfg(not(target_arch = "wasm32"))]
         "gpkg" => gpkg::layers(path),
+        #[cfg(not(target_arch = "wasm32"))]
+        "gdb" => filegdb::layers(path),
         _ => Ok(vec![open_path(path, None)?.info().name.clone()]),
     }
 }

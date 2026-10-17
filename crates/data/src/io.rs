@@ -1230,6 +1230,12 @@ pub const MAX_ZIP_LAYERS: usize = 32;
 /// [`MAX_ZIP_LAYERS`]. Folders inside are fine; macOS
 /// resource forks (`__MACOSX/`, `._*`) are ignored.
 pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
+    // A zipped File Geodatabase: its feature classes and tables.
+    if let Some(layers) =
+        crate::source::filegdb::read_zip(bytes, MAX_ZIP_LAYERS).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?
+    {
+        return Ok(layers);
+    }
     let lower = |n: &str| n.to_ascii_lowercase();
     let is_fork = |n: &str| n.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"));
     let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(lower).unwrap_or_default();
