@@ -109,6 +109,13 @@ fn export_layers(s: &mut Session, p: &Value) -> CmdResult {
     export_gdb(s, &ids, &path)
 }
 
+/// The web app has no folders to write: Export Features downloads a geodatabase as a zip there.
+#[cfg(target_arch = "wasm32")]
+fn export_gdb(_: &mut Session, _: &[u32], _: &str) -> CmdResult {
+    Err("in the web app, Export Features downloads a geodatabase as a zip".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn export_gdb(s: &mut Session, ids: &[u32], path: &str) -> CmdResult {
     if ids.is_empty() {
         return Err("no vector layers to export".into());
@@ -126,13 +133,7 @@ fn export_gdb(s: &mut Session, ids: &[u32], path: &str) -> CmdResult {
         owned.push(ds);
     }
     let refs: Vec<&rustgis_data::Dataset> = owned.iter().collect();
-    #[cfg(not(target_arch = "wasm32"))]
     let report = rustgis_data::source::filegdb::write::write(&refs, Path::new(path)).map_err(|e| e.to_string())?;
-    #[cfg(target_arch = "wasm32")]
-    let report: rustgis_data::source::filegdb::write::Report = {
-        let _ = refs;
-        return Err("in the web app, Export Features downloads a geodatabase as a zip".into());
-    };
     for n in &report.notes {
         s.notify(format!("{path}: {n}"), false);
     }
