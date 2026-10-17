@@ -13,11 +13,17 @@
 //! Read: points, multipoints, lines and polygons (true curves turned into short straight
 //! segments), standalone tables, and every field type but rasters (binary fields are left out).
 //! Z and M values, domains, subtypes, relationship classes and attachments aren't.
+//!
+//! [`write`] writes new geodatabases.
 
+mod encode;
 mod shape;
+mod spx;
+mod system;
 mod table;
 #[cfg(test)]
 mod tests;
+pub mod write;
 
 use std::path::Path;
 use std::sync::Arc;

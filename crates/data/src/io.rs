@@ -312,6 +312,8 @@ pub fn write_bytes(ds: &Dataset, ext: &str) -> Result<(Vec<u8>, usize)> {
             (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
         }
         "gpx" => (crate::interop::to_gpx(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        // A geodatabase is a folder: zipped, for downloading.
+        "gdb" => (crate::source::filegdb::write::zip(&[ds], &ds.name)?.0, 0),
         "shp" | "zip" => {
             let (parts, left_out) = shapefile_parts(ds)?;
             let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
@@ -323,14 +325,24 @@ pub fn write_bytes(ds: &Dataset, ext: &str) -> Result<(Vec<u8>, usize)> {
     })
 }
 
-/// Writes a dataset by extension (`.geojson`/`.json`, `.csv`, `.fgb`, `.gpkg` on the desktop,
+/// Writes a dataset by extension (`.geojson`/`.json`, `.csv`, `.fgb`, `.gpkg` and `.gdb` on the desktop,
 /// `.parquet`/`.geoparquet`, `.shp`, `.zip`, `.kml`, `.kmz` or `.gpx`); returns the number of features the
 /// format couldn't hold (FlatGeobuf, KML, GPX and Shapefile hold only features with geometry). A
 /// Shapefile is written as its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg` files (or zipped, to a
 /// `.zip`).
 pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = Path::new(path.to_str().map(|p| p.trim_end_matches(['/', '\\'])).unwrap_or_default())
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match ext.as_str() {
+        // A new File Geodatabase folder; the dataset is its one feature class or table.
+        #[cfg(not(target_arch = "wasm32"))]
+        "gdb" => {
+            crate::source::filegdb::write::write(&[ds], path)?;
+            Ok(0)
+        }
         "gpkg" => {
             #[cfg(not(target_arch = "wasm32"))]
             {

@@ -18,7 +18,7 @@ Formats](data-formats.md).
 | GML, MapInfo MIF/MID, OpenStreetMap PBF, TopoJSON, AutoCAD DXF (ASCII) | Yes | No |
 | LiDAR point clouds: LAS, LAZ, COPC (an evenly spread sample) | Yes | No |
 | Geotagged photos (JPEG with EXIF GPS): points with their thumbnails | Yes | No |
-| Esri File Geodatabase (`.gdb` folder, or zipped) | Yes | No |
+| Esri File Geodatabase (`.gdb` folder, or zipped) | Yes | Yes (`share.exportLayer`, `share.exportLayers`) |
 | Through GDAL: AutoCAD DWG, MapInfo TAB, OpenStreetMap XML… | Yes (desktop, when GDAL is installed) | No |
 | PostgreSQL/PostGIS databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |

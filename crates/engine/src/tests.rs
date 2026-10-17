@@ -5908,3 +5908,41 @@ fn a_failed_command_reopens_the_layout_open_before_it() {
     assert!(r.is_err());
     assert_eq!(s.active_layout.and_then(|i| s.project.layouts.get(i)).map(|l| l.name.as_str()), Some("A"));
 }
+
+#[test]
+fn layers_round_trip_through_a_file_geodatabase() {
+    let mut s = world();
+    let vector: Vec<(String, usize)> =
+        s.map().layers.iter().filter(|l| !l.is_raster()).map(|l| (l.name.clone(), l.dataset.features.len())).collect();
+    assert!(vector.len() >= 3, "{vector:?}");
+    let dir = std::env::temp_dir().join(format!("rustgis-gdb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.gdb").display().to_string();
+    // Every vector layer, as a feature class each.
+    let out = s.run("share.exportLayers", &json!({"path": path})).unwrap();
+    let classes = out["classes"].as_array().unwrap();
+    assert_eq!(classes.len(), vector.len(), "{out}");
+    for ((name, n), c) in vector.iter().zip(classes) {
+        assert_eq!(c["features"], json!(n), "{name}: {c}");
+    }
+    // Not over an existing one.
+    assert!(s.run("share.exportLayers", &json!({"path": path})).unwrap_err().contains("already exists"));
+    assert!(s.run("share.exportLayers", &json!({"path": dir.join("x.gpkg").display().to_string()})).is_err());
+    // One layer, through Export Features.
+    let one = dir.join("one.gdb").display().to_string();
+    let first = vector[0].0.clone();
+    s.run("share.exportLayer", &json!({"layer": first, "path": one})).unwrap();
+    // Listed and added back natively: every class a layer, with its features.
+    let listed = s.run("info.fileLayers", &json!({"path": path})).unwrap();
+    assert_eq!(listed["count"], json!(vector.len()));
+    let mut fresh = Session::new(Project::default());
+    let added = fresh.run("layer.addData", &json!({"path": path})).unwrap();
+    assert_eq!(added["layers"].as_array().unwrap().len(), vector.len());
+    assert_eq!(added["features"], json!(vector.iter().map(|v| v.1).sum::<usize>()));
+    // A file inside the folder (what a file dialog picks) adds the geodatabase.
+    let inside = dir.join("one.gdb").join("a00000001.gdbtable").display().to_string();
+    let added = fresh.run("layer.addData", &json!({"path": inside})).unwrap();
+    assert_eq!(added["features"], json!(vector[0].1));
+    let _ = std::fs::remove_dir_all(&dir);
+}

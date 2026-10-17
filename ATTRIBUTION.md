@@ -16,7 +16,8 @@ app. The codes it lacks (EPSG 9020–20003, `crates/data/src/raster/epsg_gap.rs`
 The File Geodatabase reader (`crates/data/src/source/filegdb/`) follows the reverse-engineered
 format description by Even Rouault ([FGDB-Spec](https://github.com/rouault/dump_gdbtable/wiki/FGDB-Spec)),
 written in Rust from that description; no code from it or from GDAL's OpenFileGDB driver is
-copied.
+copied. The writer's system tables (configuration keywords, item types and relationship types)
+and definition documents hold the same values as geodatabases written by ArcGIS and by GDAL.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
 on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the
