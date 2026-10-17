@@ -740,3 +740,36 @@ fn write_sample() {
     let report = write::write(&refs, Path::new(&std::env::var("RUSTGIS_FILEGDB_WRITE").unwrap())).unwrap();
     println!("{report:?}");
 }
+
+#[test]
+fn repeated_vertices_are_written_once() {
+    let mut ds = Dataset::new("p", GeometryType::Polygon, vec![]);
+    let ring = vec![
+        Coord::new(0.0, 0.0),
+        Coord::new(0.0, 1.0),
+        Coord::new(0.0, 1.0),
+        Coord::new(1.0, 1.0),
+        Coord::new(1.0, 0.0),
+        Coord::new(0.0, 0.0),
+    ];
+    // A ring that collapses once its repeats go: left out, the rest of the polygon kept.
+    let sliver = vec![Coord::new(5.0, 5.0), Coord::new(5.0, 5.0), Coord::new(5.0, 5.0 + 1e-12), Coord::new(5.0, 5.0)];
+    ds.push(Some(Geometry::Polygon(vec![vec![ring], vec![sliver]])), vec![]);
+    let mut lines = Dataset::new("l", GeometryType::Polyline, vec![]);
+    lines.push(
+        Some(Geometry::Line(vec![
+            vec![Coord::new(1.0, 1.0), Coord::new(1.0, 1.0)],
+            vec![Coord::new(0.0, 0.0), Coord::new(0.0, 0.0), Coord::new(2.0, 2.0)],
+        ])),
+        vec![],
+    );
+    let (files, _) = write::encode(&[&ds, &lines]).unwrap();
+    let files: HashMap<String, Vec<u8>> = files.into_iter().collect();
+    let b = open(&files, Some("p")).unwrap().read(&Request::all()).unwrap();
+    let Some(Geometry::Polygon(p)) = &b.features[0].geometry else { panic!() };
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0][0].len(), 5);
+    let b = open(&files, Some("l")).unwrap().read(&Request::all()).unwrap();
+    let Some(Geometry::Line(l)) = &b.features[0].geometry else { panic!() };
+    assert_eq!(l, &[vec![Coord::new(0.0, 0.0), Coord::new(2.0, 2.0)]]);
+}

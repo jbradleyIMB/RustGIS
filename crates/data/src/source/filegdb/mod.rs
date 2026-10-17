@@ -18,6 +18,7 @@
 
 mod encode;
 mod shape;
+mod spx;
 mod system;
 mod table;
 #[cfg(test)]

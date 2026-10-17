@@ -303,8 +303,15 @@ pub(super) fn multipoint(pts: &[Coord], g: &GeomDef) -> Option<Vec<u8>> {
 
 /// A polyline's (shape type 3) or polygon's (5) blob, from its parts.
 pub(super) fn parts(shape_type: u8, parts: &[Vec<Coord>], g: &GeomDef) -> Option<Vec<u8>> {
-    let q: Vec<Vec<(i64, i64)>> =
+    let mut q: Vec<Vec<(i64, i64)>> =
         parts.iter().map(|p| p.iter().map(|c| quantize(*c, g)).collect::<Option<Vec<_>>>()).collect::<Option<_>>()?;
+    // A vertex stored on the one before it makes a zero-length segment, which ArcGIS's Check
+    // Geometry reports: dropped, and a part left too short to be a ring or a line with it.
+    let min = if shape_type == 5 { 4 } else { 2 };
+    for p in &mut q {
+        p.dedup();
+    }
+    q.retain(|p| p.len() >= min);
     let all: Vec<(i64, i64)> = q.iter().flatten().copied().collect();
     if all.is_empty() {
         return None;

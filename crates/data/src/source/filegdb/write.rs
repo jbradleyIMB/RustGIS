@@ -5,11 +5,10 @@
 //! data. A feature class holds one kind of geometry, so a dataset mixing points, lines and
 //! polygons becomes a class for each. Names are made valid for ArcGIS (letters, digits and
 //! underscores, starting with a letter, not a reserved word), and said in the report when changed.
-//! No spatial index is written: ArcGIS reads the classes without one, and its Add Spatial Index
-//! tool builds one.
+//! Each feature class gets a spatial index (see [`spx`]), as ArcGIS keeps one.
 
 use super::encode::{self, FieldDef, GeomDef, Out, code};
-use super::system;
+use super::{spx, system};
 use crate::{DataError, Dataset, Feature, FieldType, Geometry, Result, Value};
 use rustgis_geom::Coord;
 
@@ -213,14 +212,25 @@ fn class(ds: &Dataset, name: String, family: Option<Family>, features: &[&Featur
         Some(Family::Polygons) => 4,
     };
     let extent = features.iter().filter_map(|f| f.geometry.as_ref()).fold(rustgis_geom::Extent::EMPTY, |e, g| e.union(&g.extent()));
+    // The spatial index's grid: what each feature (each point of a multipoint) is keyed by.
+    let points = family == Some(Family::Points);
+    let boxes: Vec<Option<Vec<rustgis_geom::Extent>>> = features
+        .iter()
+        .map(|f| {
+            f.geometry.as_ref().map(|g| match g {
+                Geometry::MultiPoint(p) => p.iter().map(|c| rustgis_geom::Extent::new(c.x, c.y, c.x, c.y)).collect(),
+                other => vec![other.extent()],
+            })
+        })
+        .collect();
+    let all_boxes: Vec<rustgis_geom::Extent> = boxes.iter().flatten().flatten().copied().filter(|b| !b.is_empty()).collect();
+    let grid = spx::grid_size(points, &extent, &all_boxes, all_boxes.len());
     let geom = family.map(|_| {
         let ext = if extent.is_empty() { [f64::NAN; 4] } else { [extent.min_x, extent.min_y, extent.max_x, extent.max_y] };
-        // One grid cell a few times the size of a typical feature's share of the extent.
-        let span = if extent.is_empty() { 1.0 } else { extent.width().max(extent.height()) };
-        let cell = (span / (features.len().max(1) as f64).sqrt() * 4.0).max(1e-6);
-        system::lonlat_storage(ext, vec![if cell.is_finite() { cell } else { 1.0 }])
+        system::lonlat_storage(ext, vec![grid])
     });
     let mut rows = Vec::with_capacity(features.len());
+    let (mut index, mut cells) = (Vec::new(), Vec::new());
     for f in features {
         let mut row = Vec::with_capacity(cols.len() + 1);
         if let Some(storage) = &geom {
@@ -231,6 +241,17 @@ fn class(ds: &Dataset, name: String, family: Option<Family>, features: &[&Featur
                 }
                 b
             });
+            // Indexed under the cells its boxes meet (a shape that couldn't be stored isn't).
+            if blob.is_some()
+                && let Some(Some(bs)) = boxes.get(rows.len())
+            {
+                let oid = u32::try_from(rows.len() + 1).unwrap_or(u32::MAX);
+                for b in bs {
+                    cells.clear();
+                    spx::keys(b, grid, &mut cells);
+                    index.extend(cells.iter().map(|k| (*k, oid)));
+                }
+            }
             row.push(blob.map_or(Out::Null, Out::Shape));
         }
         row.extend(cols.iter().map(|c| f.attrs.get(c.source).map_or(Out::Null, |v| out(v, &c.def))));
@@ -238,7 +259,11 @@ fn class(ds: &Dataset, name: String, family: Option<Family>, features: &[&Featur
     }
     let (gdbtable, gdbtablx) = encode::table(geometry_type, &fields, geom.as_ref(), &rows);
     report.classes.push((name.clone(), rows.len()));
-    system::Dataset { name, geometry_type, fields, geom, gdbtable, gdbtablx }
+    let mut extra = vec![("gdbindexes", spx::gdbindexes(geom.is_some()))];
+    if geom.is_some() {
+        extra.push(("spx", spx::spx(index)));
+    }
+    system::Dataset { name, geometry_type, fields, geom, gdbtable, gdbtablx, extra }
 }
 
 /// Every file of a new geodatabase holding `datasets` (named by their names), by file name, with

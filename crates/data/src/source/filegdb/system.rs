@@ -276,6 +276,8 @@ pub(super) struct Dataset {
     pub geom: Option<GeomDef>,
     pub gdbtable: Vec<u8>,
     pub gdbtablx: Vec<u8>,
+    /// The table's other files, by extension (its spatial index and the list of its indexes).
+    pub extra: Vec<(&'static str, Vec<u8>)>,
 }
 
 /// Every file of a new geodatabase holding `datasets`, by name; `guid` makes the random GUIDs
@@ -474,6 +476,9 @@ pub(super) fn files(datasets: Vec<Dataset>, guid: &mut dyn FnMut() -> [u8; 16]) 
         let stem = format!("a{:08x}", SYSTEM.len() + 1 + i);
         out.push((format!("{stem}.gdbtable"), d.gdbtable));
         out.push((format!("{stem}.gdbtablx"), d.gdbtablx));
+        for (ext, b) in d.extra {
+            out.push((format!("{stem}.{ext}"), b));
+        }
     }
     // The geodatabase's marker file.
     out.push(("gdb".into(), vec![5, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef]));
@@ -557,7 +562,7 @@ fn dataset_xml(d: &Dataset, dsid: usize) -> String {
   <ShapeFieldName>SHAPE</ShapeFieldName>
   <HasM>false</HasM>
   <HasZ>false</HasZ>
-  <HasSpatialIndex>false</HasSpatialIndex>
+  <HasSpatialIndex>true</HasSpatialIndex>
   <AreaFieldName></AreaFieldName>
   <LengthFieldName></LengthFieldName>
   <Extent xsi:nil="true"></Extent>
